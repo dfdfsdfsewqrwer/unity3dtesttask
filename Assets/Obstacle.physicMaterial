@@ -9,6 +9,6 @@ PhysicMaterial:
   m_Name: Obstacle
   dynamicFriction: 0.1
   staticFriction: 0.1
-  bounciness: 0.1
+  bounciness: 1
   frictionCombine: 1
-  bounceCombine: 3
+  bounceCombine: 0

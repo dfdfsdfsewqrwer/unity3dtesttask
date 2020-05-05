@@ -7,8 +7,6 @@ public class GameManager : MonoBehaviour
     public GameObject plane;
 
     public GameObject obstaclePrefab;
-    public int minObstacles;
-    public int maxObstacles;
     public int obstacleMinSize;
     public int obstacleMaxSize;
     public float safeTop;
@@ -17,10 +15,15 @@ public class GameManager : MonoBehaviour
     public GameObject car;
     public GameObject carHighlight;
     public float carBottom;
-    public float carMovementSpeed;
+    public float carAcceleration;
+    public float carMaxSpeed;
     public float carRotationSpeed;
     public float carFreedom;
     public int carHitPoints;
+    public float carWheelFrictionFrom;
+    public float carWheelFrictionTo;
+    public float carWheelFrictionMaxAngle;
+    public float carGameOverTimeout;
 
     public GameObject star;
     public GameObject starHighlight;
@@ -37,6 +40,8 @@ public class GameManager : MonoBehaviour
     private List<GameObject> brushes = new List<GameObject>();
     private GameObject targetBrush;
     private int carhp;
+    private float cartimeout;
+    private int level = 0;
 
     enum GamePhase
     {
@@ -44,12 +49,10 @@ public class GameManager : MonoBehaviour
         Busy,
         Drawing,
         Moving,
-        Moved,
-        Gameover,
     };
     GamePhase gamePhase = GamePhase.Idle;
 
-    public void NewGame()
+    public void NewGame(bool next_level)
     {
         gamePhase = GamePhase.Busy;
 
@@ -58,45 +61,49 @@ public class GameManager : MonoBehaviour
         rigidbody.velocity = Vector3.zero;
         rigidbody.angularVelocity = Vector3.zero;
         car.transform.rotation = Quaternion.identity;
-        ClearBrushes();
         isCarClicked = false;
         isCarHovered = false;
         isStarHovered = false;
+        ClearBrushes();
 
         Bounds planebounds = plane.GetComponent<Renderer>().bounds;
 
-        // clear area
-        GameObject[] allObjects = GameObject.FindGameObjectsWithTag("Obstacle");
-        foreach (GameObject obj in allObjects)
-            Destroy(obj);
-        ClearBrushes();
 
-        // generate obstacles
-        int max_obstacles = Random.Range(minObstacles, maxObstacles);
-        for ( int i = 0; i < max_obstacles; i++ )
+        if (next_level)
         {
-            int xsize, zsize;
-            if (Random.Range(1, 3) == 1)
-            {
-                xsize = Random.Range(obstacleMinSize, obstacleMaxSize);
-                zsize = 1;
-            }
-            else
-            {
-                xsize = 1;
-                zsize = Random.Range(obstacleMinSize, obstacleMaxSize);
-            }
+            level++;
 
-            float xpos = Mathf.RoundToInt(Random.Range(planebounds.min.x, planebounds.max.x - xsize) + 0.5f);
-            float zpos = Mathf.RoundToInt(Random.Range(planebounds.min.z + safeBottom, planebounds.max.z - safeTop - zsize) + 0.5f);
+            // clear area
+            GameObject[] allObjects = GameObject.FindGameObjectsWithTag("Obstacle");
+            foreach (GameObject obj in allObjects)
+                Destroy(obj);
 
-            for ( int xi = 0; xi < xsize; xi++ )
-                for ( int zi = 0; zi < zsize; zi++ )
+            // generate obstacles
+            for (int i = 0; i < level; i++)
+            {
+                int xsize, zsize;
+                if (Random.Range(1, 3) == 1)
                 {
-                    var obstacle = Instantiate(obstaclePrefab.gameObject, new Vector3(xpos + xi, 0.5f, zpos + zi ), Quaternion.identity);
-                    obstacle.GetComponent<Obstacle>().gameManager = this;
+                    xsize = Random.Range(obstacleMinSize, obstacleMaxSize);
+                    zsize = 1;
+                }
+                else
+                {
+                    xsize = 1;
+                    zsize = Random.Range(obstacleMinSize, obstacleMaxSize);
                 }
 
+                float xpos = Mathf.RoundToInt(Random.Range(planebounds.min.x, planebounds.max.x - xsize) + 0.5f);
+                float zpos = Mathf.RoundToInt(Random.Range(planebounds.min.z + safeBottom, planebounds.max.z - safeTop - zsize) + 0.5f);
+
+                for (int xi = 0; xi < xsize; xi++)
+                    for (int zi = 0; zi < zsize; zi++)
+                    {
+                        var obstacle = Instantiate(obstaclePrefab.gameObject, new Vector3(xpos + xi, 0.5f, zpos + zi), Quaternion.identity);
+                        obstacle.GetComponent<Obstacle>().gameManager = this;
+                    }
+
+            }
         }
 
         // init car
@@ -132,7 +139,7 @@ public class GameManager : MonoBehaviour
         Random.InitState((int)System.DateTime.Now.Ticks);
 
 
-        NewGame();
+        NewGame(true);
 
     }
 
@@ -141,7 +148,9 @@ public class GameManager : MonoBehaviour
     {
         if (Input.GetKeyDown("escape"))
         {
-            NewGame();
+            // start new game
+            level = 0;
+            NewGame(true);
             return;
         }
 
@@ -169,7 +178,29 @@ public class GameManager : MonoBehaviour
             if ( distanceToTarget < carFreedom )
                 MoveToNextBrush();
 
-            float speed = carMovementSpeed;
+            cartimeout -= Time.deltaTime;
+            if (cartimeout < 0)
+            {
+                // car stuck
+                GameOver();
+                return;
+            }
+
+            if (
+                // if car is in the air or underground...
+                car.transform.position.y < carWheelFrictionFrom ||
+                car.transform.position.y > carWheelFrictionTo ||
+
+                // or if it's not horizontal enough...
+                Mathf.Abs( car.transform.rotation.x ) > carWheelFrictionMaxAngle ||
+                Mathf.Abs( car.transform.rotation.z ) > carWheelFrictionMaxAngle
+            )
+            {
+                // ...then it doesn't have enough friction and can't accelerate or turn
+                return;
+            }
+
+            float accel = carAcceleration;
             float rotateSpeed = carRotationSpeed;
 
             // get relative angle between car and target to determine direction of turning
@@ -179,24 +210,24 @@ public class GameManager : MonoBehaviour
                 angle *= -1;
             int rotateDir = angle > 0 ? 1 : -1;
 
-            // if destination is behind - decrease speed until rotated towards it
-            if (angle > 90f || angle < -90f)
-                speed /= (Mathf.Abs(angle)-90);
-            else {
-                // smooth rotation
-                //rotateSpeed = rotateSpeed * Mathf.Abs(angle) / 90;
-                if (Mathf.Abs(angle)<5)
-                    rotateSpeed = 0;
-            }
 
-            // add some randomness
-            speed += speed * Random.Range(-0.2f, 0.2f);
+            // reduce acceleration based on how far from forward direction is target
+            accel -= Mathf.Abs(angle)/90*accel;
+
+            //if (Mathf.Abs(angle)<5)
+                //rotateSpeed = 0;
 
             // rotate towards next target
-            car.transform.RotateAround( car.transform.position, car.transform.up, Time.deltaTime * rotateSpeed * rotateDir);
+            car.transform.RotateAround(car.transform.position, car.transform.up, Time.deltaTime * rotateSpeed * rotateDir);
 
-            // move forward
-            car.GetComponent<Rigidbody>().AddForce(car.transform.forward * Time.deltaTime * speed, ForceMode.Impulse);
+            if (car.GetComponent<Rigidbody>().velocity.magnitude < carMaxSpeed)
+            {
+                // add some randomness
+                accel += accel * Random.Range(-0.2f, 0.2f);
+
+                // accelerate
+                car.GetComponent<Rigidbody>().AddForce(car.transform.forward * Time.deltaTime * accel, ForceMode.Impulse);
+            }
 
         }
     }
@@ -275,34 +306,27 @@ public class GameManager : MonoBehaviour
 
     private void MoveToNextBrush()
     {
-        if ( brushes.Count == 0 )
-        {
-            // reached end of path, nowhere to go anymore
-            gamePhase = GamePhase.Moved;
-            return;
-        }
-        
+        cartimeout = carGameOverTimeout;
         targetBrush = brushes[0];
-        brushes.RemoveAt(0);
+        if (brushes.Count > 1) // never remove last target
+            brushes.RemoveAt(0);
     }
 
     public void Crash()
     {
         carhp--;
-        Debug.Log(carhp);
+        
         if (carhp<=0)
             GameOver();
     }
 
     public void GameOver()
     {
-        if (gamePhase == GamePhase.Moving || gamePhase == GamePhase.Moved)
+        if (gamePhase == GamePhase.Moving)
         {
-            gamePhase = GamePhase.Gameover;
-
             // ... do something ...
 
-            NewGame();
+            NewGame(false);
         }
     }
 

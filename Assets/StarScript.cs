@@ -19,7 +19,7 @@ public class StarScript : MonoBehaviour
 
     void OnCollisionEnter(Collision col)
     {
-        gameManager.GameOver();
+        gameManager.NewGame(true);
     }
 
 }
